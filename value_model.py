@@ -145,6 +145,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         past_key_values=None,
         attention_mask=None,
         return_past_key_values=False,
+        return_lm_logits=True,
         **kwargs,
     ):
         r"""
@@ -177,7 +178,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         )
 
         last_hidden_state = base_model_output.hidden_states[-1]
-        lm_logits = base_model_output.logits
+        lm_logits = base_model_output.logits if return_lm_logits else None
         loss = base_model_output.loss
 
         if last_hidden_state.device != self.v_head.summary.weight.device:
@@ -186,7 +187,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         value = self.v_head(last_hidden_state).squeeze(-1)
 
         # force upcast in fp32 if logits are in half-precision
-        if lm_logits.dtype != torch.float32:
+        if lm_logits is not None and lm_logits.dtype != torch.float32:
             lm_logits = lm_logits.float()
 
         if return_past_key_values:

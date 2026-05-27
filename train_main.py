@@ -53,7 +53,7 @@ class PRMTrainer(Trainer):
                          optimizers=optimizers,
                          preprocess_logits_for_metrics=preprocess_logits_for_metrics, )
         self.loss_type = args.loss_type
-        if self.loss_type == 'nce' or self.loss_type == 'orm':
+        if self.loss_type in ['bce', 'nce', 'orm']:
             self.loss_fn = nn.BCELoss(reduction='none')
         elif self.loss_type=='mse':
             self.loss_fn = nn.MSELoss(reduction='none')
@@ -78,11 +78,11 @@ class PRMTrainer(Trainer):
         return loss
 
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
 
-        _,_,rewards = model(input_ids=inputs['input_ids'],attention_mask=inputs['attention_mask'])
+        _,_,rewards = model(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], return_lm_logits=False)
 
-        if self.loss_type=='nce':
+        if self.loss_type in ['bce', 'nce']:
             rewards = rewards.gather(dim=-1, index=inputs['special_tokens'])
             rewards = rewards.sigmoid()
             loss = (self.loss_fn(rewards, torch.where(inputs['step_labels']!=-100,inputs['step_labels'],0).bfloat16()) * (inputs['step_labels']!=-100)).sum()/(inputs['step_labels']!=-100).sum()
@@ -105,9 +105,27 @@ class PRMTrainer(Trainer):
 def instruction_format(s):
     return f'[INST] {s} [/INST]'
 
+def load_math_shepherd(dataset_path):
+    if os.path.isdir(dataset_path):
+        if os.path.exists(os.path.join(dataset_path, "dataset_dict.json")):
+            return load_from_disk(dataset_path)['train']
+        json_files = [
+            os.path.join(dataset_path, name)
+            for name in os.listdir(dataset_path)
+            if name.endswith((".jsonl", ".json"))
+        ]
+        if json_files:
+            return load_dataset("json", data_files=json_files)['train']
+    elif dataset_path.endswith((".jsonl", ".json")):
+        return load_dataset("json", data_files=dataset_path)['train']
+
+    return load_from_disk(dataset_path)['train']
+
 def generate_dataset(prm_token,tokenizer):
-    ds = load_from_disk(args.dataset_path)['train']
+    ds = load_math_shepherd(args.dataset_path)
     ds = [d for d in ds]
+    if args.max_train_samples:
+        ds = ds[:args.max_train_samples]
     queries = []
     longer_queries = []
     longest_queries = []
@@ -179,6 +197,14 @@ if __name__=='__main__':
     parser.add_argument("--model-path", type=str, default="/nobackup/hf-model/deepseek-math-7b-base")
     parser.add_argument("--save-path", type=str, default="/nobackup/prm_checkpoints/neg-zeta-16")
     parser.add_argument("--zeta", type=int, default=4)
+    parser.add_argument("--max-train-samples", type=int, default=0,
+                        help="Use a small prefix of Math-Shepherd for smoke tests. 0 means full dataset.")
+    parser.add_argument("--deepspeed-config", type=str, default="accelerate_configs/deepspeed_3.json")
+    parser.add_argument("--save-strategy", type=str, default="epoch", choices=["no", "steps", "epoch"])
+    parser.add_argument("--save-steps", type=int, default=500)
+    parser.add_argument("--save-total-limit", type=int, default=3)
+    parser.add_argument("--resume-from-checkpoint", type=str, default=None)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--loss-type", type=str, default='rank',
                         choices=['rank', 'orm', 'mse', 'bce'])
     args = parser.parse_args()
@@ -239,7 +265,7 @@ if __name__=='__main__':
         }
 
 
-    deepspeed_config = json.load(open('accelerate_configs/deepspeed_3.json'))
+    deepspeed_config = json.load(open(args.deepspeed_config))
     deepspeed_config["scheduler"]["params"] = {
         "warmup_min_lr": 0,
         "warmup_max_lr": 'auto',
@@ -259,10 +285,12 @@ if __name__=='__main__':
         warmup_ratio=0.1,
         gradient_checkpointing=True,
         num_train_epochs=2,
-        gradient_accumulation_steps=4, #4 for 8 GPUs
+        gradient_accumulation_steps=args.gradient_accumulation_steps, # 2xA800 scripts default to 4; GA16 was not a good empirical match.
         per_device_train_batch_size=1,
         logging_steps=1,
-        save_strategy="epoch",
+        save_strategy=args.save_strategy,
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
         report_to="none",
         remove_unused_columns=False,
         bf16=True,
@@ -273,6 +301,7 @@ if __name__=='__main__':
         deepspeed=deepspeed_config,
         # sharded_ddp="zero_dp_2",
     )
+    training_args.loss_type = args.loss_type
 
     trainer = PRMTrainer(
         reward_model,
@@ -282,4 +311,4 @@ if __name__=='__main__':
         data_collator=data_collator
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)

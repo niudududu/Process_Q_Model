@@ -49,6 +49,11 @@ def instruction_format(s):
     # return tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
     return f"Below is an instruction that describes a task.\nWrite a response that appropriately completes the request.\n\n### Instruction:\n{s}\n\n### Response: Let's think step by step"
 
+def load_gsm_plus_testmini(gsm_plus_file=None):
+    if gsm_plus_file:
+        return load_dataset("json", data_files=gsm_plus_file)['train']
+    return load_dataset('qintongli/GSM-Plus')['testmini']
+
 
 def split_query(completions, n, N=16): # extract top-n logprob completion for each query
     splitted_completions = []
@@ -72,9 +77,9 @@ def compute_metrics(dataset_name, scored_results):
     sample_nums = [1, 8, 16, 32, 64, 128]
 
     if dataset_name == 'gsm8k':
-        original_dataset = load_dataset('qintongli/GSM-Plus')['testmini']
+        original_dataset = load_gsm_plus_testmini(args.gsm_plus_file)
     else:
-        path = './MATH500.jsonl'
+        path = args.math_file
         with open(path) as f:
             original_dataset = [json.loads(line) for line in f]
 
@@ -149,6 +154,8 @@ if __name__=='__main__':
     parser.add_argument("--data-name", type=str,choices=['math','gsm8k'])
     parser.add_argument("--data-file", type=str,required=True)
     parser.add_argument("--save-file", type=str,default="./prm-data.json")
+    parser.add_argument("--math-file", type=str, default="./MATH500.jsonl")
+    parser.add_argument("--gsm-plus-file", type=str, default=None)
 
     args = parser.parse_args()
     print(args)
@@ -229,7 +236,7 @@ if __name__=='__main__':
         ]
         queries = []
         cur_queries = []
-        origin_dataset = load_dataset('qintongli/GSM-Plus')['testmini']
+        origin_dataset = load_gsm_plus_testmini(args.gsm_plus_file)
         for file_name in file_list:
             cur_data = json.load(open(file_name))
             if len(cur_queries) == len(cur_data):
@@ -256,7 +263,7 @@ if __name__=='__main__':
         ]
         queries = []
         cur_queries = []
-        path = './MATH500.jsonl'
+        path = args.math_file
         with open(path) as f:
             origin_dataset = [json.loads(line) for line in f]
         for file_name in file_list:

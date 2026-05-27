@@ -114,9 +114,9 @@ class PRMTrainer(Trainer):
         loss = (torch.where(labels == 1, loss, 0).sum(-1) / torch.where(labels == 1, 1, 0).sum(-1)).mean()
         return loss
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
 
-        _, _, rewards = model(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'])
+        _, _, rewards = model(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], return_lm_logits=False)
 
         rewards = rewards.gather(dim=-1, index=inputs['special_tokens'])
 
